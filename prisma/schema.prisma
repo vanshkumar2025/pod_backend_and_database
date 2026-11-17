@@ -1,0 +1,43 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Domain records retain their existing JSON payload shape while IDs and
+// frequently constrained fields are indexed relationally by PostgreSQL.
+model User {
+  id    String @id
+  email String @unique
+  data  Json
+}
+
+model Team {
+  id   String @id
+  data Json
+}
+
+model Task {
+  id   String @id
+  data Json
+}
+
+model Message {
+  id   String @id
+  data Json
+}
+
+model PeerRating {
+  id          String @id
+  teamId      String
+  raterId     String
+  ratedUserId String
+  updatedAt   String
+  data        Json
+
+  @@unique([teamId, raterId, ratedUserId])
+  @@index([teamId, updatedAt])
+}

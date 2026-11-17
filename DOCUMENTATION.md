@@ -126,8 +126,15 @@ Check the Contributions dashboard to see who's doing what. The analytics show co
 
 - **Frontend**: React with Vite
 - **Backend**: Node.js
-- **Database**: MongoDB Atlas (cloud-hosted, persistent)
+- **Database**: PostgreSQL, accessed through Prisma ORM
 - **AI**: Google Gemini API for role and task assignment
 - **Hosting**: Render.com with auto-deploy from GitHub
+
+### PostgreSQL setup
+
+Set `DATABASE_URL` to a PostgreSQL connection string (for example,
+`postgresql://user:password@localhost:5432/collabspace?schema=public`). Run
+`npm install` to generate the Prisma client, then `npm run db:migrate` to apply
+the checked-in migrations. For local schema changes, use `npm run db:migrate:dev`.
 
 ---

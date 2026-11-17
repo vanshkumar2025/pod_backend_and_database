@@ -416,7 +416,7 @@ Based on the exhaustive research documented above, **CollabSpace** was designed 
 |:---|:---|
 | Frontend | React.js (Vite), Vanilla CSS |
 | Backend | Node.js, Express.js |
-| Database | MongoDB Atlas |
+| Database | PostgreSQL via Prisma |
 | Authentication | Session-based with bcrypt password hashing & Email OTP |
 | Deployment | Vercel-ready architecture |
 

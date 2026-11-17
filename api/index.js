@@ -6,7 +6,7 @@ import https from "https";
 import nodemailer from "nodemailer";
 import path from "path";
 import { fileURLToPath } from "url";
-import { MongoClient } from "mongodb";
+import { PrismaClient } from "@prisma/client";
 import {
   buildTeamPeerRatingSnapshot,
   buildWeeklyProgressReport,
@@ -79,35 +79,21 @@ const MIME_TYPES = {
   ".webp": "image/webp"
 };
 
-/* ── MongoDB Connection ──────────────────────────────── */
+/* ── PostgreSQL / Prisma ─────────────────────────────── */
 
-const MONGODB_URI = process.env.MONGODB_URI;
-const MONGODB_DB_NAME = String(
-  process.env.MONGODB_DB_NAME || "collabspace"
-).trim() || "collabspace";
-if (!MONGODB_URI) {
-  console.error("FATAL: MONGODB_URI environment variable is not set.");
+if (!process.env.DATABASE_URL) {
+  console.error("FATAL: DATABASE_URL environment variable is not set.");
   process.exit(1);
 }
 
-const mongoClient = new MongoClient(MONGODB_URI);
-let db;
-
-async function connectToDatabase() {
-  if (db) return db;
-  try {
-    await mongoClient.connect();
-    db = mongoClient.db(MONGODB_DB_NAME);
-    console.log(`✅ Connected to MongoDB Atlas (${MONGODB_DB_NAME})`);
-    return db;
-  } catch (error) {
-    console.error("Failed to connect to MongoDB:", error);
-    process.exit(1);
-  }
-}
-
-// Connect on startup
-connectToDatabase().then(() => ensureIndexes());
+const prisma = new PrismaClient();
+const prismaModels = {
+  users: prisma.user,
+  teams: prisma.team,
+  tasks: prisma.task,
+  messages: prisma.message,
+  peerRatings: prisma.peerRating
+};
 
 /* ── Helpers ─────────────────────────────────────────── */
 
@@ -229,74 +215,75 @@ async function readJsonBody(req) {
   return JSON.parse(rawBody);
 }
 
-/* ── MongoDB Collection Helpers (Atomic Operations) ──── */
+/* ── Prisma data helpers ─────────────────────────────── */
 
-async function getCollection(name) {
-  const database = await connectToDatabase();
-  return database.collection(name);
+function getModel(name) {
+  const model = prismaModels[name];
+  if (!model) throw new Error(`Unknown data model: ${name}`);
+  return model;
 }
 
-async function ensureIndexes() {
-  const database = await connectToDatabase();
-  await database.collection("users").createIndex({ id: 1 }, { unique: true });
-  await database.collection("users").createIndex({ email: 1 }, { unique: true });
-  await database.collection("teams").createIndex({ id: 1 }, { unique: true });
-  await database.collection("tasks").createIndex({ id: 1 }, { unique: true });
-  await database.collection("messages").createIndex({ id: 1 }, { unique: true });
-  await database.collection("peerRatings").createIndex(
-    { teamId: 1, raterId: 1, ratedUserId: 1 },
-    { unique: true }
-  );
-  await database.collection("peerRatings").createIndex({ teamId: 1, updatedAt: -1 });
-  console.log("✅ MongoDB indexes ensured");
+async function readModel(name) {
+  const rows = await getModel(name).findMany();
+  return rows.map((row) => row.data);
 }
 
 // Read helpers (safe — read-only)
 async function readUsers() {
-  const col = await getCollection("users");
-  const docs = await col.find({}).toArray();
-  return docs.map(({ _id, ...rest }) => rest);
+  return readModel("users");
 }
 
 async function readTasks() {
-  const col = await getCollection("tasks");
-  const rawTasks = await col.find({}).toArray();
-  const cleaned = rawTasks.map(({ _id, ...rest }) => rest);
-  return cleaned.map((task) => normalizeStoredTask(task));
+  return (await readModel("tasks")).map((task) => normalizeStoredTask(task));
 }
 
 async function readTeams() {
-  const col = await getCollection("teams");
-  const docs = await col.find({}).toArray();
-  return docs.map(({ _id, ...rest }) => rest);
+  return readModel("teams");
 }
 
 async function readMessages() {
-  const col = await getCollection("messages");
-  const docs = await col.find({}).toArray();
-  return docs.map(({ _id, ...rest }) => rest);
+  return readModel("messages");
 }
 
 async function readPeerRatings() {
-  const col = await getCollection("peerRatings");
-  const docs = await col.find({}).toArray();
-  return docs.map(({ _id, ...rest }) => rest);
+  return readModel("peerRatings");
 }
 
 // Atomic write helpers
 async function insertDoc(collectionName, doc) {
-  const col = await getCollection(collectionName);
-  await col.insertOne(doc);
+  const model = getModel(collectionName);
+  const data = { ...doc };
+  const row = { id: String(data.id), data };
+  if (collectionName === "users") row.email = String(data.email || "");
+  await model.create({ data: row });
 }
 
 async function updateDoc(collectionName, filter, update, options = {}) {
-  const col = await getCollection(collectionName);
-  await col.updateOne(filter, update, options);
+  const model = getModel(collectionName);
+  const where = collectionName === "peerRatings"
+    ? { teamId_raterId_ratedUserId: { teamId: filter.teamId, raterId: filter.raterId, ratedUserId: filter.ratedUserId } }
+    : { id: String(filter.id) };
+  const current = await model.findUnique({ where });
+  if (!current && !options.upsert && !update.$setOnInsert) return;
+  const data = { ...(current?.data || {}) };
+  if (update.$set) Object.assign(data, update.$set);
+  if (update.$push) {
+    for (const [key, value] of Object.entries(update.$push)) data[key] = [...(data[key] || []), value];
+  }
+  if (update.$setOnInsert && !current) Object.assign(data, update.$setOnInsert);
+  const row = { id: String(data.id), data };
+  if (collectionName === "users") row.email = String(data.email || "");
+  if (collectionName === "peerRatings") {
+    row.teamId = String(data.teamId);
+    row.raterId = String(data.raterId);
+    row.ratedUserId = String(data.ratedUserId);
+    row.updatedAt = String(data.updatedAt || "");
+  }
+  await model.upsert({ where, create: row, update: { data: row.data, ...(row.email ? { email: row.email } : {}), ...(collectionName === "peerRatings" ? { updatedAt: row.updatedAt } : {}) } });
 }
 
 async function deleteDoc(collectionName, filter) {
-  const col = await getCollection(collectionName);
-  await col.deleteOne(filter);
+  await getModel(collectionName).deleteMany({ where: { id: String(filter.id) } });
 }
 
 async function appendMessage(message) {

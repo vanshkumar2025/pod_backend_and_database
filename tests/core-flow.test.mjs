@@ -2,7 +2,6 @@ import "dotenv/config";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import test from "node:test";
-import { MongoClient } from "mongodb";
 
 const HOST = "127.0.0.1";
 const PORT = 3101;
@@ -86,13 +85,12 @@ async function waitForServer() {
 }
 
 test("leader/member flow preserves permissions and current membership identity", async (t) => {
-  const testDbName = `collabspace_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const server = spawn("node", ["server.js"], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       HOST,
-      MONGODB_DB_NAME: testDbName,
+      DATABASE_URL: process.env.DATABASE_URL,
       PORT: String(PORT)
     },
     stdio: ["ignore", "pipe", "pipe"]
@@ -110,14 +108,6 @@ test("leader/member flow preserves permissions and current membership identity",
     server.kill("SIGTERM");
     await new Promise((resolve) => server.once("exit", resolve));
 
-    if (!process.env.MONGODB_URI) {
-      return;
-    }
-
-    const client = new MongoClient(process.env.MONGODB_URI);
-    await client.connect();
-    await client.db(testDbName).dropDatabase();
-    await client.close();
   });
 
   await waitForServer();
