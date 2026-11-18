@@ -1,0 +1,174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String    @id
+  email              String    @unique
+  name               String
+  passwordHash       String
+  course             String    @default("")
+  year               String    @default("")
+  about              String    @default("")
+  skills             String[]  @default([])
+  workFocus          String[]  @default([])
+  role               String    @default("Member")
+  teamName           String    @default("")
+  createdAt          String
+  emailVerifiedAt    String    @default("")
+  emailVerification  Json?
+  passwordReset      Json?
+  profileUpdatedAt   String    @default("")
+
+  createdTeams       Team[]
+  memberships        TeamMember[]
+  invitations        TeamInvitation[]
+  createdTasks       Task[]           @relation("TaskCreator")
+  taskAssignments    TaskAssignee[]
+  messages           Message[]
+  ratingsGiven       PeerRating[]     @relation("RatingRater")
+  ratingsReceived    PeerRating[]     @relation("RatingRated")
+
+  @@map("users")
+}
+
+model Team {
+  id             String   @id
+  name           String
+  projectTitle   String   @default("")
+  deadline       String   @default("")
+  createdById    String
+  createdAt      String
+  rolesCheckedAt String   @default("")
+
+  createdBy      User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  members        TeamMember[]
+  invitations    TeamInvitation[]
+  tasks          Task[]
+  messages       Message[]
+  peerRatings    PeerRating[]
+
+  @@index([createdById])
+  @@map("teams")
+}
+
+model TeamMember {
+  id       String @id @default(uuid())
+  teamId   String
+  userId   String
+  name     String
+  role     String @default("Member")
+  joinedAt String
+
+  team     Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@map("team_members")
+}
+
+model TeamInvitation {
+  id        String @id @default(uuid())
+  teamId    String
+  userId    String
+  name      String
+  email     String
+  role      String @default("Member")
+  invitedAt String
+  invitedBy String
+
+  team      Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@map("team_invitations")
+}
+
+model Task {
+  id            String   @id
+  title         String
+  description   String   @default("")
+  status        String   @default("To Do")
+  deadline      String   @default("")
+  priority      String   @default("medium")
+  teamId        String
+  teamName      String   @default("")
+  createdById   String
+  createdByName String   @default("")
+  assignee      String   @default("")
+  assigneeId    String   @default("")
+  archivedAt    String   @default("")
+  completedAt   String   @default("")
+  createdAt     String
+  updatedAt     String
+  comments      Json     @default("[]")
+
+  team          Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  createdBy     User     @relation("TaskCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  assignees     TaskAssignee[]
+
+  @@index([teamId, status])
+  @@index([createdById])
+  @@map("tasks")
+}
+
+model TaskAssignee {
+  id     String @id @default(uuid())
+  taskId String
+  userId String
+  name   String
+
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, userId])
+  @@index([userId])
+  @@map("task_assignees")
+}
+
+model Message {
+  id        String @id
+  text      String
+  teamId    String
+  teamName  String @default("")
+  userId    String
+  userName  String
+  createdAt String
+
+  team      Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([teamId, createdAt])
+  @@map("messages")
+}
+
+model PeerRating {
+  id           String @id
+  teamId       String
+  raterId      String
+  ratedUserId  String
+  score        Int?
+  feedback     String @default("")
+  ratedUserName String @default("")
+  ratedUserRole String @default("Member")
+  raterName    String @default("")
+  raterRole    String @default("Member")
+  teamName     String @default("")
+  createdAt    String
+  updatedAt    String
+
+  team         Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  rater        User   @relation("RatingRater", fields: [raterId], references: [id], onDelete: Cascade)
+  ratedUser    User   @relation("RatingRated", fields: [ratedUserId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, raterId, ratedUserId])
+  @@index([teamId, updatedAt])
+  @@map("peer_ratings")
+}

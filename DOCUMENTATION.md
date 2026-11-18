@@ -132,9 +132,13 @@ Check the Contributions dashboard to see who's doing what. The analytics show co
 
 ### PostgreSQL setup
 
-Set `DATABASE_URL` to a PostgreSQL connection string (for example,
-`postgresql://user:password@localhost:5432/collabspace?schema=public`). Run
-`npm install` to generate the Prisma client, then `npm run db:migrate` to apply
-the checked-in migrations. For local schema changes, use `npm run db:migrate:dev`.
+1. Copy `.env.example` to `.env` and keep the local `DATABASE_URL`.
+2. Start Postgres with `npm run db:up` (Docker).
+3. Run `npm install` to generate the Prisma client.
+4. Apply migrations with `npm run db:migrate`.
+
+The schema stores users, teams, memberships, invitations, tasks, assignees,
+messages, and peer ratings as relational PostgreSQL tables. For local schema
+changes, use `npm run db:migrate:dev`.
 
 ---

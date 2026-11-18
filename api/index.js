@@ -87,13 +87,6 @@ if (!process.env.DATABASE_URL) {
 }
 
 const prisma = new PrismaClient();
-const prismaModels = {
-  users: prisma.user,
-  teams: prisma.team,
-  tasks: prisma.task,
-  messages: prisma.message,
-  peerRatings: prisma.peerRating
-};
 
 /* ── Helpers ─────────────────────────────────────────── */
 
@@ -217,77 +210,551 @@ async function readJsonBody(req) {
 
 /* ── Prisma data helpers ─────────────────────────────── */
 
-function getModel(name) {
-  const model = prismaModels[name];
-  if (!model) throw new Error(`Unknown data model: ${name}`);
-  return model;
+function asString(value, fallback = "") {
+  if (value == null) {
+    return fallback;
+  }
+  return String(value);
 }
 
-async function readModel(name) {
-  const rows = await getModel(name).findMany();
-  return rows.map((row) => row.data);
+function asStringArray(value) {
+  return Array.isArray(value) ? value.map((item) => String(item)) : [];
 }
 
-// Read helpers (safe — read-only)
+function userToDoc(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    about: asString(row.about),
+    course: asString(row.course),
+    createdAt: asString(row.createdAt),
+    email: asString(row.email),
+    emailVerification: row.emailVerification || null,
+    emailVerifiedAt: asString(row.emailVerifiedAt),
+    id: asString(row.id),
+    name: asString(row.name),
+    passwordHash: asString(row.passwordHash),
+    passwordReset: row.passwordReset || null,
+    profileUpdatedAt: asString(row.profileUpdatedAt),
+    role: asString(row.role, "Member"),
+    skills: asStringArray(row.skills),
+    teamName: asString(row.teamName),
+    workFocus: asStringArray(row.workFocus),
+    year: asString(row.year)
+  };
+}
+
+function teamToDoc(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    _rolesCheckedAt: asString(row.rolesCheckedAt) || undefined,
+    createdAt: asString(row.createdAt),
+    createdBy: asString(row.createdById),
+    deadline: asString(row.deadline),
+    id: asString(row.id),
+    invitations: Array.isArray(row.invitations)
+      ? row.invitations.map((invite) => ({
+          email: asString(invite.email),
+          invitedAt: asString(invite.invitedAt),
+          invitedBy: asString(invite.invitedBy),
+          name: asString(invite.name),
+          role: asString(invite.role, "Member"),
+          userId: asString(invite.userId)
+        }))
+      : [],
+    members: Array.isArray(row.members)
+      ? row.members.map((member) => ({
+          joinedAt: asString(member.joinedAt),
+          name: asString(member.name),
+          role: asString(member.role, "Member"),
+          userId: asString(member.userId)
+        }))
+      : [],
+    name: asString(row.name),
+    projectTitle: asString(row.projectTitle)
+  };
+}
+
+function taskToDoc(row) {
+  if (!row) {
+    return null;
+  }
+
+  const assignees = Array.isArray(row.assignees)
+    ? row.assignees.map((assignee) => ({
+        id: asString(assignee.userId),
+        name: asString(assignee.name)
+      }))
+    : [];
+
+  return {
+    archivedAt: asString(row.archivedAt),
+    assignee: asString(row.assignee) || (assignees[0]?.name || ""),
+    assigneeId: asString(row.assigneeId) || (assignees[0]?.id || ""),
+    assignees,
+    comments: Array.isArray(row.comments) ? row.comments : [],
+    completedAt: asString(row.completedAt),
+    createdAt: asString(row.createdAt),
+    createdBy: asString(row.createdById),
+    createdByName: asString(row.createdByName),
+    deadline: asString(row.deadline),
+    description: asString(row.description),
+    id: asString(row.id),
+    priority: asString(row.priority, "medium"),
+    status: asString(row.status, "To Do"),
+    teamId: asString(row.teamId),
+    teamName: asString(row.teamName),
+    title: asString(row.title),
+    updatedAt: asString(row.updatedAt)
+  };
+}
+
+function messageToDoc(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    createdAt: asString(row.createdAt),
+    id: asString(row.id),
+    teamId: asString(row.teamId),
+    teamName: asString(row.teamName),
+    text: asString(row.text),
+    userId: asString(row.userId),
+    userName: asString(row.userName)
+  };
+}
+
+function peerRatingToDoc(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    createdAt: asString(row.createdAt),
+    feedback: asString(row.feedback),
+    id: asString(row.id),
+    ratedUserId: asString(row.ratedUserId),
+    ratedUserName: asString(row.ratedUserName),
+    ratedUserRole: asString(row.ratedUserRole, "Member"),
+    raterId: asString(row.raterId),
+    raterName: asString(row.raterName),
+    raterRole: asString(row.raterRole, "Member"),
+    score: row.score,
+    teamId: asString(row.teamId),
+    teamName: asString(row.teamName),
+    updatedAt: asString(row.updatedAt)
+  };
+}
+
+function applyDocumentUpdate(current, update) {
+  const data = { ...(current || {}) };
+
+  if (update.$set) {
+    Object.assign(data, update.$set);
+  }
+
+  if (update.$push) {
+    for (const [key, value] of Object.entries(update.$push)) {
+      data[key] = [...(Array.isArray(data[key]) ? data[key] : []), value];
+    }
+  }
+
+  if (update.$unset) {
+    for (const key of Object.keys(update.$unset)) {
+      data[key] = null;
+    }
+  }
+
+  if (!current && update.$setOnInsert) {
+    Object.assign(data, update.$setOnInsert);
+  }
+
+  return data;
+}
+
+function userWriteData(doc) {
+  return {
+    about: asString(doc.about),
+    course: asString(doc.course),
+    createdAt: asString(doc.createdAt, new Date().toISOString()),
+    email: asString(doc.email),
+    emailVerification: doc.emailVerification || null,
+    emailVerifiedAt: asString(doc.emailVerifiedAt),
+    id: asString(doc.id),
+    name: asString(doc.name),
+    passwordHash: asString(doc.passwordHash),
+    passwordReset: doc.passwordReset || null,
+    profileUpdatedAt: asString(doc.profileUpdatedAt),
+    role: asString(doc.role, "Member"),
+    skills: asStringArray(doc.skills),
+    teamName: asString(doc.teamName),
+    workFocus: asStringArray(doc.workFocus),
+    year: asString(doc.year)
+  };
+}
+
+function teamMemberWriteData(teamId, member) {
+  return {
+    joinedAt: asString(member.joinedAt, new Date().toISOString()),
+    name: asString(member.name),
+    role: asString(member.role, "Member"),
+    teamId,
+    userId: asString(member.userId)
+  };
+}
+
+function teamInvitationWriteData(teamId, invite) {
+  return {
+    email: asString(invite.email),
+    invitedAt: asString(invite.invitedAt, new Date().toISOString()),
+    invitedBy: asString(invite.invitedBy),
+    name: asString(invite.name),
+    role: asString(invite.role, "Member"),
+    teamId,
+    userId: asString(invite.userId)
+  };
+}
+
+function taskAssigneeWriteData(taskId, assignee) {
+  return {
+    name: asString(assignee.name),
+    taskId,
+    userId: asString(assignee.id || assignee.userId)
+  };
+}
+
+function taskWriteData(doc) {
+  const assignees = Array.isArray(doc.assignees) ? doc.assignees : [];
+  return {
+    archivedAt: asString(doc.archivedAt),
+    assignee: asString(doc.assignee) || asString(assignees[0]?.name),
+    assigneeId: asString(doc.assigneeId) || asString(assignees[0]?.id),
+    comments: Array.isArray(doc.comments) ? doc.comments : [],
+    completedAt: asString(doc.completedAt),
+    createdAt: asString(doc.createdAt, new Date().toISOString()),
+    createdById: asString(doc.createdBy),
+    createdByName: asString(doc.createdByName),
+    deadline: asString(doc.deadline),
+    description: asString(doc.description),
+    id: asString(doc.id),
+    priority: asString(doc.priority, "medium"),
+    status: asString(doc.status, "To Do"),
+    teamId: asString(doc.teamId),
+    teamName: asString(doc.teamName),
+    title: asString(doc.title),
+    updatedAt: asString(doc.updatedAt, new Date().toISOString())
+  };
+}
+
+function peerRatingWriteData(doc) {
+  const score = Number(doc.score);
+  return {
+    createdAt: asString(doc.createdAt, asString(doc.updatedAt, new Date().toISOString())),
+    feedback: asString(doc.feedback),
+    id: asString(doc.id),
+    ratedUserId: asString(doc.ratedUserId),
+    ratedUserName: asString(doc.ratedUserName),
+    ratedUserRole: asString(doc.ratedUserRole, "Member"),
+    raterId: asString(doc.raterId),
+    raterName: asString(doc.raterName),
+    raterRole: asString(doc.raterRole, "Member"),
+    score: Number.isInteger(score) ? score : null,
+    teamId: asString(doc.teamId),
+    teamName: asString(doc.teamName),
+    updatedAt: asString(doc.updatedAt, new Date().toISOString())
+  };
+}
+
+async function replaceTeamMembers(teamId, members) {
+  await prisma.teamMember.deleteMany({ where: { teamId } });
+  const rows = (Array.isArray(members) ? members : [])
+    .filter((member) => member?.userId)
+    .map((member) => teamMemberWriteData(teamId, member));
+  if (rows.length > 0) {
+    await prisma.teamMember.createMany({ data: rows });
+  }
+}
+
+async function replaceTeamInvitations(teamId, invitations) {
+  await prisma.teamInvitation.deleteMany({ where: { teamId } });
+  const rows = (Array.isArray(invitations) ? invitations : [])
+    .filter((invite) => invite?.userId)
+    .map((invite) => teamInvitationWriteData(teamId, invite));
+  if (rows.length > 0) {
+    await prisma.teamInvitation.createMany({ data: rows });
+  }
+}
+
+async function replaceTaskAssignees(taskId, assignees) {
+  await prisma.taskAssignee.deleteMany({ where: { taskId } });
+  const rows = (Array.isArray(assignees) ? assignees : [])
+    .filter((assignee) => assignee?.id || assignee?.userId)
+    .map((assignee) => taskAssigneeWriteData(taskId, assignee));
+  if (rows.length > 0) {
+    await prisma.taskAssignee.createMany({ data: rows });
+  }
+}
+
+async function loadTeam(where) {
+  return prisma.team.findUnique({
+    where,
+    include: { invitations: true, members: true }
+  });
+}
+
 async function readUsers() {
-  return readModel("users");
+  const rows = await prisma.user.findMany();
+  return rows.map(userToDoc);
 }
 
 async function readTasks() {
-  return (await readModel("tasks")).map((task) => normalizeStoredTask(task));
+  const rows = await prisma.task.findMany({ include: { assignees: true } });
+  return rows.map((row) => normalizeStoredTask(taskToDoc(row)));
 }
 
 async function readTeams() {
-  return readModel("teams");
+  const rows = await prisma.team.findMany({
+    include: { invitations: true, members: true }
+  });
+  return rows.map(teamToDoc);
 }
 
 async function readMessages() {
-  return readModel("messages");
+  const rows = await prisma.message.findMany({ orderBy: { createdAt: "asc" } });
+  return rows.map(messageToDoc);
 }
 
 async function readPeerRatings() {
-  return readModel("peerRatings");
+  const rows = await prisma.peerRating.findMany();
+  return rows.map(peerRatingToDoc);
 }
 
-// Atomic write helpers
+async function insertUser(doc) {
+  await prisma.user.create({ data: userWriteData(doc) });
+}
+
+async function insertTeam(doc) {
+  const teamId = asString(doc.id);
+  await prisma.team.create({
+    data: {
+      createdAt: asString(doc.createdAt, new Date().toISOString()),
+      createdById: asString(doc.createdBy),
+      deadline: asString(doc.deadline),
+      id: teamId,
+      name: asString(doc.name),
+      projectTitle: asString(doc.projectTitle),
+      rolesCheckedAt: asString(doc._rolesCheckedAt)
+    }
+  });
+  await replaceTeamMembers(teamId, doc.members);
+  await replaceTeamInvitations(teamId, doc.invitations);
+}
+
+async function insertTask(doc) {
+  const data = taskWriteData(doc);
+  await prisma.task.create({ data });
+  await replaceTaskAssignees(data.id, doc.assignees);
+}
+
+async function insertPeerRating(doc) {
+  await prisma.peerRating.create({ data: peerRatingWriteData(doc) });
+}
+
 async function insertDoc(collectionName, doc) {
-  const model = getModel(collectionName);
-  const data = { ...doc };
-  const row = { id: String(data.id), data };
-  if (collectionName === "users") row.email = String(data.email || "");
-  await model.create({ data: row });
+  if (collectionName === "users") {
+    await insertUser(doc);
+    return;
+  }
+  if (collectionName === "teams") {
+    await insertTeam(doc);
+    return;
+  }
+  if (collectionName === "tasks") {
+    await insertTask(doc);
+    return;
+  }
+  if (collectionName === "messages") {
+    await appendMessage(doc);
+    return;
+  }
+  if (collectionName === "peerRatings") {
+    await insertPeerRating(doc);
+    return;
+  }
+  throw new Error(`Unknown data model: ${collectionName}`);
+}
+
+async function updateUserDoc(filter, update, options = {}) {
+  const currentRow = await prisma.user.findUnique({ where: { id: String(filter.id) } });
+  const current = userToDoc(currentRow);
+  if (!current && !options.upsert && !update.$setOnInsert) {
+    return;
+  }
+  const next = applyDocumentUpdate(current, update);
+  const data = userWriteData(next);
+  const { id, createdAt, ...updateData } = data;
+  await prisma.user.upsert({
+    create: data,
+    update: updateData,
+    where: { id }
+  });
+}
+
+async function updateTeamDoc(filter, update, options = {}) {
+  const currentRow = await loadTeam({ id: String(filter.id) });
+  const current = teamToDoc(currentRow);
+  if (!current && !options.upsert && !update.$setOnInsert) {
+    return;
+  }
+
+  const next = applyDocumentUpdate(current, update);
+  const teamId = asString(next.id || filter.id);
+  const scalarData = {
+    createdAt: asString(next.createdAt, new Date().toISOString()),
+    createdById: asString(next.createdBy),
+    deadline: asString(next.deadline),
+    id: teamId,
+    name: asString(next.name),
+    projectTitle: asString(next.projectTitle),
+    rolesCheckedAt: asString(next._rolesCheckedAt)
+  };
+
+  await prisma.team.upsert({
+    create: scalarData,
+    update: {
+      createdById: scalarData.createdById,
+      deadline: scalarData.deadline,
+      name: scalarData.name,
+      projectTitle: scalarData.projectTitle,
+      rolesCheckedAt: scalarData.rolesCheckedAt
+    },
+    where: { id: teamId }
+  });
+
+  const replacingMembers = Boolean(update.$set?.members) || Boolean(!current && next.members);
+  const replacingInvitations = Boolean(update.$set?.invitations) || Boolean(update.$push?.invitations) || Boolean(!current && next.invitations);
+
+  if (replacingMembers) {
+    await replaceTeamMembers(teamId, next.members);
+  }
+  if (replacingInvitations) {
+    await replaceTeamInvitations(teamId, next.invitations);
+  }
+}
+
+async function updateTaskDoc(filter, update, options = {}) {
+  const currentRow = await prisma.task.findUnique({
+    include: { assignees: true },
+    where: { id: String(filter.id) }
+  });
+  const current = taskToDoc(currentRow);
+  if (!current && !options.upsert && !update.$setOnInsert) {
+    return;
+  }
+  const next = applyDocumentUpdate(current, update);
+  const data = taskWriteData(next);
+  const { id, createdAt, ...updateData } = data;
+  await prisma.task.upsert({
+    create: data,
+    update: updateData,
+    where: { id }
+  });
+  await replaceTaskAssignees(id, next.assignees);
+}
+
+async function updatePeerRatingDoc(filter, update, options = {}) {
+  const where = {
+    teamId_raterId_ratedUserId: {
+      ratedUserId: String(filter.ratedUserId),
+      raterId: String(filter.raterId),
+      teamId: String(filter.teamId)
+    }
+  };
+  const currentRow = await prisma.peerRating.findUnique({ where });
+  const current = peerRatingToDoc(currentRow);
+  if (!current && !options.upsert && !update.$setOnInsert) {
+    return;
+  }
+  const next = applyDocumentUpdate(current, update);
+  const data = peerRatingWriteData(next);
+  await prisma.peerRating.upsert({
+    create: data,
+    update: {
+      feedback: data.feedback,
+      ratedUserName: data.ratedUserName,
+      ratedUserRole: data.ratedUserRole,
+      raterName: data.raterName,
+      raterRole: data.raterRole,
+      score: data.score,
+      teamName: data.teamName,
+      updatedAt: data.updatedAt
+    },
+    where
+  });
 }
 
 async function updateDoc(collectionName, filter, update, options = {}) {
-  const model = getModel(collectionName);
-  const where = collectionName === "peerRatings"
-    ? { teamId_raterId_ratedUserId: { teamId: filter.teamId, raterId: filter.raterId, ratedUserId: filter.ratedUserId } }
-    : { id: String(filter.id) };
-  const current = await model.findUnique({ where });
-  if (!current && !options.upsert && !update.$setOnInsert) return;
-  const data = { ...(current?.data || {}) };
-  if (update.$set) Object.assign(data, update.$set);
-  if (update.$push) {
-    for (const [key, value] of Object.entries(update.$push)) data[key] = [...(data[key] || []), value];
+  if (collectionName === "users") {
+    await updateUserDoc(filter, update, options);
+    return;
   }
-  if (update.$setOnInsert && !current) Object.assign(data, update.$setOnInsert);
-  const row = { id: String(data.id), data };
-  if (collectionName === "users") row.email = String(data.email || "");
+  if (collectionName === "teams") {
+    await updateTeamDoc(filter, update, options);
+    return;
+  }
+  if (collectionName === "tasks") {
+    await updateTaskDoc(filter, update, options);
+    return;
+  }
   if (collectionName === "peerRatings") {
-    row.teamId = String(data.teamId);
-    row.raterId = String(data.raterId);
-    row.ratedUserId = String(data.ratedUserId);
-    row.updatedAt = String(data.updatedAt || "");
+    await updatePeerRatingDoc(filter, update, options);
+    return;
   }
-  await model.upsert({ where, create: row, update: { data: row.data, ...(row.email ? { email: row.email } : {}), ...(collectionName === "peerRatings" ? { updatedAt: row.updatedAt } : {}) } });
+  throw new Error(`Unknown data model: ${collectionName}`);
 }
 
 async function deleteDoc(collectionName, filter) {
-  await getModel(collectionName).deleteMany({ where: { id: String(filter.id) } });
+  if (collectionName === "tasks") {
+    await prisma.task.deleteMany({ where: { id: String(filter.id) } });
+    return;
+  }
+  if (collectionName === "users") {
+    await prisma.user.deleteMany({ where: { id: String(filter.id) } });
+    return;
+  }
+  if (collectionName === "teams") {
+    await prisma.team.deleteMany({ where: { id: String(filter.id) } });
+    return;
+  }
+  if (collectionName === "messages") {
+    await prisma.message.deleteMany({ where: { id: String(filter.id) } });
+    return;
+  }
+  if (collectionName === "peerRatings") {
+    await prisma.peerRating.deleteMany({ where: { id: String(filter.id) } });
+    return;
+  }
+  throw new Error(`Unknown data model: ${collectionName}`);
 }
 
 async function appendMessage(message) {
-  await insertDoc("messages", message);
+  await prisma.message.create({
+    data: {
+      createdAt: asString(message.createdAt, new Date().toISOString()),
+      id: asString(message.id),
+      teamId: asString(message.teamId),
+      teamName: asString(message.teamName),
+      text: asString(message.text),
+      userId: asString(message.userId),
+      userName: asString(message.userName)
+    }
+  });
 }
 
 /* ── Auth helpers ────────────────────────────────────── */
@@ -736,8 +1203,8 @@ async function getAuthenticatedUser(req) {
     return null;
   }
 
-  const users = await readUsers();
-  return users.find((user) => user.id === session.userId) || null;
+  const user = await prisma.user.findUnique({ where: { id: session.userId } });
+  return userToDoc(user);
 }
 
 function buildSessionCookie(user) {
@@ -805,8 +1272,7 @@ async function handleRegister(req, res) {
       return;
     }
 
-    const users = await readUsers();
-    const existingUser = users.find((user) => user.email === email);
+    const existingUser = await prisma.user.findUnique({ where: { email } });
 
     if (existingUser) {
       sendJson(res, 409, {
@@ -830,7 +1296,6 @@ async function handleRegister(req, res) {
       year
     };
 
-    users.push(user);
     await insertDoc("users", user);
 
     sendJson(
@@ -854,8 +1319,7 @@ async function handleLogin(req, res) {
     const body = await readJsonBody(req);
     const email = normalizeEmail(body.email);
     const password = String(body.password || "");
-    const users = await readUsers();
-    const user = users.find((candidate) => candidate.email === email);
+    const user = userToDoc(await prisma.user.findUnique({ where: { email } }));
 
     if (!user || !verifyPassword(password, user.passwordHash)) {
       sendJson(res, 401, { error: "Incorrect email or password." });
